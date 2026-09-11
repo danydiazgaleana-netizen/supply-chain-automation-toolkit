@@ -117,7 +117,7 @@ un entorno operativo real, para medir tiempo de revisión manual evitado.
 
 ## Autora
 
-Proyecto desarrollado por [Tu nombre] como parte de mi trabajo en mejora
+Proyecto desarrollado por Daniela Diaz Galeana como parte de mi trabajo en mejora
 continua de procesos de cadena de suministro. Construido con apoyo de
 herramientas de IA para el desarrollo, bajo dirección propia del diseño,
 las reglas de negocio y las decisiones de producto.
