@@ -1,4 +1,0 @@
-customtkinter>=5.2.2
-SQLAlchemy>=2.0.30
-openpyxl>=3.1.2
-psycopg2-binary>=2.9.9

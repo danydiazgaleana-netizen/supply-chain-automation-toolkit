@@ -1,22 +1,27 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from datetime import datetime
+from typing import Optional
 
 from infrastructure.db.session import get_session
-from infrastructure.storage.guide_storage import save_guide_file, InvalidFileTypeError
 from core.services.shipment_service import (
-    ShipmentService, PermissionDeniedError, InvalidStatusTransitionError, OwnershipError,
+    ShipmentService,
+    BusinessRuleError,
+    ConcurrentUpdateError,
+    InvalidStatusTransitionError,
+    PermissionDeniedError,
+    OwnershipError,
+    DiscrepancyBlockedError,
 )
 from core.models.entities import ShipmentStatus, ProblemType
 from core.schemas.dto import ShipmentDTO, shipment_to_dto
+from core.schemas.validators import ShipmentUpdateSchema
 from core.session import SessionState
-
+from pydantic import ValidationError
 
 @dataclass
 class OpResult:
     ok: bool
     message: str
-
 
 class ShipmentController:
     def __init__(self, session: SessionState):
@@ -26,68 +31,95 @@ class ShipmentController:
         with get_session() as db:
             service = ShipmentService(db)
             shipments = service.list_shipments(self.session.role, self.session.user_id)
-            # DTOs construidos dentro del `with`, mismo patrón que ya blindamos.
             return [shipment_to_dto(s) for s in shipments]
 
-    def get_kpis(self) -> dict[str, int]:
-        with get_session() as db:
-            service = ShipmentService(db)
-            return service.get_kpis(self.session.role, self.session.user_id)
-
     def change_status(
-        self, shipment_id: int, new_status: ShipmentStatus,
-        problem_type: ProblemType | None = None,
+        self,
+        shipment_id: int,
+        new_status: ShipmentStatus,
+        problem_type: Optional[ProblemType] = None,
+        version_expected: int = 1,
     ) -> OpResult:
         try:
             with get_session() as db:
                 service = ShipmentService(db)
                 shipment = service.change_status(
-                    shipment_id=shipment_id, new_status=new_status,
-                    user_role=self.session.role, user_id=self.session.user_id,
+                    shipment_id=shipment_id,
+                    new_status=new_status,
+                    user_role=self.session.role,
+                    user_id=self.session.user_id,
                     problem_type=problem_type,
+                    version_expected=version_expected,
                 )
                 dto = shipment_to_dto(shipment)
-                return OpResult(True, f"Embarque #{dto.id} actualizado a {dto.status}.")
-        except (PermissionDeniedError, InvalidStatusTransitionError, ValueError, OwnershipError) as exc:
+                return OpResult(True, f"Estatus actualizado a {dto.status} (v{dto.version}).")
+        except DiscrepancyBlockedError as exc:
+            return OpResult(False, f"🔴 {exc}")
+        except ConcurrentUpdateError as exc:
+            return OpResult(False, f"⚠️ Conflicto de concurrencia: {exc}. Recarga la lista y vuelve a intentar.")
+        except (PermissionDeniedError, InvalidStatusTransitionError, ValueError, OwnershipError, BusinessRuleError) as exc:
             return OpResult(False, str(exc))
 
-    def update_logistics(self, shipment_id: int, **fields) -> OpResult:
+    def update_shipment_detalles(
+        self,
+        shipment_id: int,
+        numero_pedido: str,
+        cajas: int,
+        chofer: str,
+        fecha_entrega: str,
+        version: int,
+    ) -> OpResult:
+        try:
+            validated = ShipmentUpdateSchema(
+                numero_pedido=numero_pedido,
+                cajas=cajas,
+                chofer=chofer,
+                fecha_entrega=fecha_entrega,
+                version=version,
+            )
+            with get_session() as db:
+                service = ShipmentService(db)
+                shipment = service.update_shipment_detalles(
+                    shipment_id=shipment_id,
+                    data=validated,
+                    user_role=self.session.role,
+                    user_id=self.session.user_id,
+                )
+                dto = shipment_to_dto(shipment)
+                return OpResult(True, f"Embarque actualizado correctamente (v{dto.version}).")
+        except ValidationError as exc:
+            return OpResult(False, f"Error de validación: {exc}")
+        except ConcurrentUpdateError as exc:
+            return OpResult(False, f"⚠️ Conflicto de concurrencia: {exc}. Recarga la lista y vuelve a intentar.")
+        except (BusinessRuleError, PermissionDeniedError, OwnershipError, ValueError) as exc:
+            return OpResult(False, str(exc))
+
+    def attach_guide(self, shipment_id: int, file_path: str) -> OpResult:
         try:
             with get_session() as db:
                 service = ShipmentService(db)
-                service.update_logistics_details(
-                    shipment_id=shipment_id, user_role=self.session.role,
-                    user_id=self.session.user_id, **fields,
-                )
-                return OpResult(True, "Datos logísticos actualizados.")
-        except (PermissionDeniedError, OwnershipError, ValueError) as exc:
+                shipment = service.attach_guide(shipment_id, file_path, self.session.role, self.session.user_id)
+                dto = shipment_to_dto(shipment)
+                return OpResult(True, f"Guía adjuntada correctamente (v{dto.version}).")
+        except (FileNotFoundError, BusinessRuleError, PermissionDeniedError, PermissionError, IOError) as exc:
             return OpResult(False, str(exc))
+        except Exception as exc:
+            return OpResult(False, f"Error inesperado: {exc}")
 
-    def update_departure(self, shipment_id: int, **fields) -> OpResult:
-        try:
-            with get_session() as db:
-                service = ShipmentService(db)
-                service.update_departure_details(
-                    shipment_id=shipment_id, user_role=self.session.role,
-                    user_id=self.session.user_id, **fields,
-                )
-                return OpResult(True, "Datos de salida actualizados.")
-        except (PermissionDeniedError, OwnershipError, ValueError) as exc:
-            return OpResult(False, str(exc))
+    def download_guide(self, shipment_id: int) -> OpResult:
+        with get_session() as db:
+            service = ShipmentService(db)
+            result = service.download_guide(shipment_id)
+            if result.get("ok"):
+                return OpResult(True, result["path"])
+            return OpResult(False, result["message"])
 
-    def attach_guide(self, shipment_id: int, order_number: str, source_path: str) -> OpResult:
-        try:
-            relative_path = save_guide_file(source_path, order_number)
-        except (InvalidFileTypeError, FileNotFoundError) as exc:
-            return OpResult(False, str(exc))
+    def get_active_alerts(self) -> list[dict]:
+        with get_session() as db:
+            service = ShipmentService(db)
+            return service.obtener_alertas()
 
-        try:
-            with get_session() as db:
-                service = ShipmentService(db)
-                service.attach_guide_file(
-                    shipment_id=shipment_id, user_role=self.session.role,
-                    user_id=self.session.user_id, relative_path=relative_path,
-                )
-                return OpResult(True, "Guía PDF adjuntada correctamente.")
-        except (PermissionDeniedError, OwnershipError, ValueError) as exc:
-            return OpResult(False, str(exc))
+    def list_discrepancias(self) -> list[dict]:
+        with get_session() as db:
+            service = ShipmentService(db)
+            return service.listar_discrepancias(resuelta=False)

@@ -1,36 +1,39 @@
 """
-Punto único de acceso al engine/sesión. Nadie más en el proyecto debe llamar
-create_engine directamente — eso es lo que te permite, el día de mañana,
-cambiar SQLite por Postgres sin tocar una sola línea fuera de este archivo.
+Punto único de acceso al engine/sesión.
 """
 from __future__ import annotations
 from contextlib import contextmanager
 from typing import Iterator
+from pathlib import Path
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session
 
-from config.settings import settings
 from core.models.entities import Base
 
-# Postgres es el motor por defecto (ver ADR-001 en config/settings.py):
-# el proceso real que se reemplaza tiene condiciones de carrera reales
-# (Excel compartido editado simultáneamente por gerencia y embarques).
-# check_same_thread=False solo aplica si se usa el fallback SQLite en local.
+
+# --- FORZADO A SQLITE ---
+DB_URL = "sqlite:///./wms.db"
+
+def _ensure_sqlite_dir(db_url: str) -> None:
+    if "sqlite:///" in db_url:
+        db_path = db_url.replace("sqlite:///", "")
+        parent = Path(db_path).parent
+        if parent and not parent.exists():
+            parent.mkdir(parents=True, exist_ok=True)
+
+_ensure_sqlite_dir(DB_URL)
+
 _engine = create_engine(
-    settings.db_url,
-    connect_args={"check_same_thread": False} if "sqlite" in settings.db_url else {},
+    DB_URL,
+    connect_args={"check_same_thread": False},
     future=True,
 )
 
 SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False, future=True)
 
 
-if "sqlite" in settings.db_url:
-    # CRÍTICO: SQLite trae foreign keys DESACTIVADO por default -- sin esto,
-    # los constraints de integridad referencial (ForeignKey) en los modelos
-    # son decorativos, no reales. Postgres sí los aplica siempre, por eso
-    # este bug solo aparece en el fallback local y hay que forzarlo aquí.
+if "sqlite" in DB_URL:
     @event.listens_for(_engine, "connect")
     def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()
@@ -44,7 +47,6 @@ def init_db() -> None:
 
 @contextmanager
 def get_session() -> Iterator[Session]:
-    """Uso: with get_session() as db: ..."""
     session = SessionLocal()
     try:
         yield session

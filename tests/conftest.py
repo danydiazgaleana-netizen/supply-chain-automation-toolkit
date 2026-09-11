@@ -1,67 +1,115 @@
-"""
-Fixtures compartidas. Regla central: CADA TEST corre contra una base de
-datos SQLite temporal y nueva (tmp_path), nunca contra wms.db de desarrollo
-ni contra Postgres real. Esto es lo que permite correr `pytest` sin efectos
-secundarios sobre datos reales, y sin que un test deje basura para el
-siguiente (aislamiento total).
-"""
-from __future__ import annotations
-import os
-import sys
-import importlib
-import pytest
+﻿import pytest
+from typing import Generator
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.pool import StaticPool
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Reemplaza 'core.models.entities' con la ruta real de tu modulo de modelos
+from core.models.entities import (
+    Base,
+    Channel,
+    SalesOrder,
+    Shipment,
+    SalesOrderStatus,
+    ShipmentStatus
+)
+
+# ----------------------------------------------------------------------
+# Configuración del Engine de SQLite en memoria
+# ----------------------------------------------------------------------
+# Use StaticPool to ensure the same connection is reused across the test thread
+# for in-memory SQLite, preventing the database from disappearing between operations.
+SQLITE_IN_MEMORY_URL = "sqlite:///:memory:"
+
+@pytest.fixture(scope="session")
+def db_engine():
+    """Crea un motor SQLite en memoria reutilizable durante la sesión de pruebas."""
+    engine = create_engine(
+        SQLITE_IN_MEMORY_URL,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool
+    )
+    yield engine
+    engine.dispose()
 
 
-@pytest.fixture()
-def db_url(tmp_path):
-    """Ruta de DB única por test -- tmp_path la borra sola al terminar."""
-    return f"sqlite:///{tmp_path / 'test_wms.db'}"
-
-
-@pytest.fixture()
-def db_session_factory(db_url, monkeypatch):
+@pytest.fixture(scope="function", autouse=True)
+def db_session(db_engine) -> Generator[Session, None, None]:
     """
-    Reconstruye infrastructure.db.session con la URL temporal de este test.
-    Necesario porque ese módulo crea el engine UNA vez al importarse -- si no
-    lo recargamos, todos los tests compartirían el engine del primer test
-    que corrió (justo el tipo de contaminación cruzada que un test suite
-    debe evitar).
+    Crea un esquema limpio antes de cada prueba y destruye las tablas al finalizar.
+    Garantiza el aislamiento total entre tests y evita errores de duplicado.
     """
-    monkeypatch.setenv("WMS_DB_URL", db_url)
+    Base.metadata.create_all(bind=db_engine)
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=db_engine)
+    session = TestingSessionLocal()
 
-    import config.settings as settings_module
-    importlib.reload(settings_module)
-
-    import infrastructure.db.session as session_module
-    importlib.reload(session_module)
-    session_module.init_db()
-
-    yield session_module.get_session
-
-
-@pytest.fixture()
-def seeded_channels(db_session_factory):
-    """Canales base disponibles en cada test que los necesite."""
-    from core.models.entities import Channel
-    with db_session_factory() as db:
-        for code, name in [
-            ("VL", "Venta Local"), ("PEGE", "PEGE"), ("TIAU", "Tienda Autoservicio"),
-            ("MUESTRAS", "Muestras"), ("AMAZON", "Amazon"), ("MH", "Mayoreo/Handling"),
-        ]:
-            db.add(Channel(code=code, name=name, is_active=True))
-    return db_session_factory
+    try:
+        yield session
+    finally:
+        session.close()
+        Base.metadata.drop_all(bind=db_engine)
 
 
-@pytest.fixture()
-def admin_and_operator(seeded_channels):
-    """Dos usuarios base -- ADMIN y OPERADOR -- para pruebas de permisos."""
-    from core.services.auth_service import AuthService
-    from core.models.entities import UserRole
+# ----------------------------------------------------------------------
+# Fixtures de Datos Maestros (Semillas para pruebas)
+# ----------------------------------------------------------------------
 
-    with seeded_channels() as db:
-        auth = AuthService(db)
-        admin = auth.create_user("admin_test", "AdminPass123", "Admin Test", UserRole.ADMIN)
-        operator = auth.create_user("op_test", "OperadorPass1", "Operador Test", UserRole.OPERADOR)
-        return {"admin_id": admin.id, "operator_id": operator.id}
+@pytest.fixture
+def sample_channel(db_session: Session) -> Channel:
+    """Fixture que provee un canal activo por defecto."""
+    channel = Channel(
+        code="DIR-MX",
+        name="Venta Directa México",
+        is_active=True
+    )
+    db_session.add(channel)
+    db_session.commit()
+    db_session.refresh(channel)
+    return channel
+
+
+@pytest.fixture
+def inactive_channel(db_session: Session) -> Channel:
+    """Fixture que provee un canal inactivo para probar validaciones de inactividad."""
+    channel = Channel(
+        code="INACT-01",
+        name="Canal Descontinuado",
+        is_active=False
+    )
+    db_session.add(channel)
+    db_session.commit()
+    db_session.refresh(channel)
+    return channel
+
+
+@pytest.fixture
+def sample_sales_order(db_session: Session, sample_channel: Channel) -> SalesOrder:
+    """Fixture que crea una orden de venta ligada al canal activo mediante FK (channel_id)."""
+    order = SalesOrder(
+        order_number="OV-2026-0001",
+        customer_name="Empresa Ejemplo S.A.",
+        channel_id=sample_channel.id,
+        created_by_id=101,
+        status=SalesOrderStatus.ACTIVE,
+        version=1
+    )
+    db_session.add(order)
+    db_session.commit()
+    db_session.refresh(order)
+    return order
+
+
+@pytest.fixture
+def sample_shipment(db_session: Session, sample_sales_order: SalesOrder) -> Shipment:
+    """Fixture que crea un embarque pendiente asociado a la SalesOrder."""
+    shipment = Shipment(
+        sales_order_id=sample_sales_order.id,
+        status=ShipmentStatus.PENDING,
+        tracking_number="TRACK-998877",
+        driver_name="Juan Pérez",
+        version=1
+    )
+    db_session.add(shipment)
+    db_session.commit()
+    db_session.refresh(shipment)
+    return shipment

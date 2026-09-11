@@ -15,9 +15,11 @@ from gui.controllers.sales_order_controller import SalesOrderController
 from gui.controllers.user_management_controller import UserManagementController
 from gui.controllers.shipment_controller import ShipmentController
 from gui.views.sales_order_form_view import SalesOrderFormView
+from gui.views.logistica_form_view import LogisticaFormView
 from gui.views.user_management_view import UserManagementView
 from gui.views.shipment_list_view import ShipmentListView
 from gui.views.login_view import LoginView
+from gui.views.discrepancias_view import DiscrepanciasView
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -35,8 +37,6 @@ class MainWindow(ctk.CTk):
 
         self._current_view: ctk.CTkFrame | None = None
         self._show_login()
-
-    # ---- Navegación entre pantallas raíz ----------------------------------
 
     def _swap_root_view(self, view: ctk.CTkFrame) -> None:
         if self._current_view is not None:
@@ -82,7 +82,15 @@ class AppShell(ctk.CTkFrame):
             justify="left", text_color="gray60", font=ctk.CTkFont(size=12),
         ).pack(padx=20, pady=(0, 20), anchor="w")
 
-        nav_items = ["Órdenes de Venta", "Embarques", "Reportes Ejecutivos", "Usuarios y Roles"]
+        # --- MENÚ LATERAL CON LA OPCIÓN "🔍 Discrepancias" ---
+        nav_items = [
+            "Órdenes de Venta",
+            "Captura Logística",
+            "Embarques",
+            "🔍 Discrepancias",
+            "Reportes Ejecutivos",
+            "Usuarios y Roles"
+        ]
         for item in nav_items:
             ctk.CTkButton(
                 sidebar, text=item, anchor="w", fg_color="transparent",
@@ -113,11 +121,14 @@ class AppShell(ctk.CTkFrame):
         self._navigate("Órdenes de Venta")
 
     def _navigate(self, item: str) -> None:
+        # Limpiar el contenido actual
         for widget in self.content.winfo_children():
             widget.destroy()
 
+        # Obtener la sesión activa
         session = SessionManager.current()
 
+        # Navegar según la opción seleccionada
         if item == "Órdenes de Venta":
             controller = SalesOrderController(
                 current_user_role=session.role, current_user_id=session.user_id,
@@ -125,16 +136,33 @@ class AppShell(ctk.CTkFrame):
             SalesOrderFormView(self.content, controller=controller).grid(
                 row=0, column=0, sticky="nswe", pady=10
             )
+
+        elif item == "Captura Logística":
+            controller = SalesOrderController(
+                current_user_role=session.role, current_user_id=session.user_id,
+            )
+            LogisticaFormView(self.content, controller=controller).grid(
+                row=0, column=0, sticky="nswe", pady=10
+            )
+
         elif item == "Embarques":
             controller = ShipmentController(session=session)
             ShipmentListView(self.content, controller=controller).grid(
                 row=0, column=0, sticky="nswe", pady=10
             )
+
+        elif item == "🔍 Discrepancias":
+            controller = ShipmentController(session=session)
+            DiscrepanciasView(self.content, controller=controller).grid(
+                row=0, column=0, sticky="nswe", pady=10
+            )
+
         elif item == "Usuarios y Roles":
             controller = UserManagementController(session=session)
             UserManagementView(self.content, controller=controller).grid(
                 row=0, column=0, sticky="nswe", pady=10
             )
+
         else:
             ctk.CTkLabel(
                 self.content, text=f"'{item}' todavía no está implementado.",

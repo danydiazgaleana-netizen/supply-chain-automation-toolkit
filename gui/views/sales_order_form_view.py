@@ -1,7 +1,7 @@
 """
-Vista de captura de Orden de Venta. Solo construye UI y delega al controller.
-Cero lógica de negocio aquí — si ves una validación de reglas de negocio en
-este archivo (más allá de "está vacío el campo"), está en el lugar equivocado.
+Vista de captura de OV simple (sin los campos extendidos de Captura Logística).
+Se mantiene por compatibilidad, pero para la demo de conciliación usa
+"Captura Logística", que sí persiste total_cajas_logistica y numero_pedido_logistica.
 """
 from __future__ import annotations
 import customtkinter as ctk
@@ -49,6 +49,9 @@ class SalesOrderFormView(ctk.CTkFrame):
         ).grid(row=7, column=0, columnspan=2, sticky="we", padx=16, pady=(0, 16))
 
     def _on_submit(self) -> None:
+        # IMPORTANTE: 'channel', no 'channel_code' -- debe coincidir EXACTO
+        # con el nombre de parámetro de SalesOrderController.create_order().
+        # Esta línea fue la causa del TypeError de la sesión pasada.
         result = self.controller.create_order(
             order_number=self.entry_order_number.get(),
             customer_name=self.entry_customer.get(),

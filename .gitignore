@@ -1,4 +1,35 @@
-﻿*.db
-*.env
+# --- Entorno y dependencias ---
+.venv/
+venv/
 __pycache__/
+*.pyc
+*.pyo
+
+# --- Base de datos local -- NUNCA debe subirse, contiene datos de prueba
+# reales capturados durante el desarrollo (nombres, guías, etc.) ---
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Archivos adjuntos capturados por la app (guías PDF reales) ---
+guias_maestras/
+generated_reports/
+
+# --- Variables de entorno y secretos -- si alguna vez agregas un .env,
+# NUNCA debe subirse (contraseñas de base de datos, claves, etc.) ---
+.env
+.env.local
+
+# --- Configuración de editores ---
 .vscode/
+.idea/
+*.swp
+
+# --- Sistema operativo ---
+.DS_Store
+Thumbs.db
+
+# --- Pruebas ---
+.pytest_cache/
+htmlcov/
+.coverage
