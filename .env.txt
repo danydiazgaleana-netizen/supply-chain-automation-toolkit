@@ -1,4 +1,0 @@
-DATABASE_URL=sqlite:///./wms.db
-SECRET_KEY=your-super-secret-key-12345
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=30
